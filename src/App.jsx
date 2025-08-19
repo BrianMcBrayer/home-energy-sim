@@ -79,6 +79,14 @@ const AIR_TIGHTNESS_PRESETS = [
   { key: "passive", label: "Passive House (~0.6 ACH50)", ach50: 0.6 },
 ];
 
+const EXTERIOR_CONTINUOUS_INSULATION = [
+  { key: "none", label: "None", rValue: 0 },
+  { key: "r3", label: '0.5" Polyiso (R-3)', rValue: 3.0 },
+  { key: "r6", label: '1.0" Polyiso (R-6)', rValue: 6.0 },
+  { key: "r9", label: '1.5" Polyiso (R-9)', rValue: 9.0 },
+  { key: "r12", label: '2.0" Polyiso (R-12)', rValue: 12.0 },
+];
+
 // Per-inch nominal R-values
 const R_PER_INCH = {
   wood: 1.25,
@@ -124,6 +132,7 @@ const HERS_DEFAULTS = {
     framingKey: "2x4",
     cavityKey: "fiberglass",
     sheathingKey: "osbwrap",
+    exteriorContinuousKey: "none", // Add this line
     interiorPolyiso: false,
     ach50: 7,
     windowU: 0.4,
@@ -169,6 +178,7 @@ function calcWholeWallR({
   framingDepthIn,
   cavityInsulationKey,
   exteriorSheathingKey,
+  exteriorContinuousR, // New parameter
   interiorPolyiso,
   framingFactor = 0.23,
 }) {
@@ -185,12 +195,25 @@ function calcWholeWallR({
     ? LAYER_R.interiorPolyisoHalf
     : 0;
 
+  // Add the R-value from the new continuous foam layer
+  const rExteriorContinuous = exteriorContinuousR || 0;
+
   // Common layers NOT including sheathing
   const rCommon = LAYER_R.airFilms + LAYER_R.drywallHalf + LAYER_R.siding;
 
-  // Add the distinct sheathing R-value to both paths
-  const rStudPath = rCommon + rInteriorThermalBreak + rSheathing + rWoodStud;
-  const rCavityPath = rCommon + rInteriorThermalBreak + rSheathing + rCavity;
+  // Add the distinct sheathing R-value AND new continuous foam to both paths
+  const rStudPath =
+    rCommon +
+    rInteriorThermalBreak +
+    rSheathing +
+    rWoodStud +
+    rExteriorContinuous;
+  const rCavityPath =
+    rCommon +
+    rInteriorThermalBreak +
+    rSheathing +
+    rCavity +
+    rExteriorContinuous;
 
   // Area-weighted effective R
   const uEff = framingFactor / rStudPath + (1 - framingFactor) / rCavityPath;
@@ -423,6 +446,7 @@ function runUnitTests() {
     framingDepthIn: 3.5,
     cavityInsulationKey: "fiberglass",
     exteriorSheathingKey: "osbwrap",
+    exteriorContinuousR: 0,
     interiorPolyiso: false,
     framingFactor: 0.23,
   }).rEff;
@@ -430,6 +454,7 @@ function runUnitTests() {
     framingDepthIn: 5.5,
     cavityInsulationKey: "fiberglass",
     exteriorSheathingKey: "osbwrap",
+    exteriorContinuousR: 0,
     interiorPolyiso: false,
     framingFactor: 0.23,
   }).rEff;
@@ -453,6 +478,7 @@ function runUnitTests() {
     framingDepthIn: 3.5,
     cavityInsulationKey: "fiberglass",
     exteriorSheathingKey: "osbwrap",
+    exteriorContinuousR: 0,
     interiorPolyiso: false,
     framingFactor: 0.23,
   }).rEff;
@@ -503,23 +529,27 @@ function ScenarioCard({ title, state, onChange, shared }) {
   const framing =
     FRAMING_OPTIONS.find((f) => f.key === state.framingKey) ||
     FRAMING_OPTIONS[0];
-  const wholeWall = React.useMemo(
-    () =>
-      calcWholeWallR({
-        framingDepthIn: framing.depth,
-        cavityInsulationKey: state.cavityKey,
-        exteriorSheathingKey: state.sheathingKey,
-        interiorPolyiso: state.interiorPolyiso,
-        framingFactor: state.framingFactor,
-      }),
-    [
-      framing.depth,
-      state.cavityKey,
-      state.sheathingKey,
-      state.interiorPolyiso,
-      state.framingFactor,
-    ]
-  );
+  const wholeWall = React.useMemo(() => {
+    const exteriorFoam = EXTERIOR_CONTINUOUS_INSULATION.find(
+      (o) => o.key === state.exteriorContinuousKey
+    ) || { rValue: 0 };
+
+    return calcWholeWallR({
+      framingDepthIn: framing.depth,
+      cavityInsulationKey: state.cavityKey,
+      exteriorSheathingKey: state.sheathingKey,
+      exteriorContinuousR: exteriorFoam.rValue,
+      interiorPolyiso: state.interiorPolyiso,
+      framingFactor: state.framingFactor,
+    });
+  }, [
+    framing.depth,
+    state.cavityKey,
+    state.sheathingKey,
+    state.exteriorContinuousKey, // Add this dependency
+    state.interiorPolyiso,
+    state.framingFactor,
+  ]);
 
   const volumeFt3 = shared.conditionedFloorArea * shared.avgCeilingHeight;
 
@@ -592,6 +622,7 @@ function ScenarioCard({ title, state, onChange, shared }) {
           )?.depth || 3.5,
         cavityInsulationKey: shared.hers.reference.cavityKey,
         exteriorSheathingKey: shared.hers.reference.sheathingKey,
+        exteriorContinuousR: 0, // Add this for the reference home
         interiorPolyiso: shared.hers.reference.interiorPolyiso,
         framingFactor: state.framingFactor,
       }),
@@ -678,6 +709,25 @@ function ScenarioCard({ title, state, onChange, shared }) {
             onChange={(e) => onChange({ sheathingKey: e.target.value })}
           >
             {EXTERIOR_SHEATHING.map((o) => (
+              <option key={o.key} value={o.key}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium">
+            Additional Exterior Insulation
+          </label>
+          <select
+            className="w-full mt-1 rounded-lg border px-3 py-2"
+            value={state.exteriorContinuousKey}
+            onChange={(e) =>
+              onChange({ exteriorContinuousKey: e.target.value })
+            }
+          >
+            {EXTERIOR_CONTINUOUS_INSULATION.map((o) => (
               <option key={o.key} value={o.key}>
                 {o.label}
               </option>
@@ -837,6 +887,7 @@ export default function App() {
     framingKey: "2x4",
     cavityKey: "fiberglass",
     sheathingKey: "osbwrap",
+    exteriorContinuousKey: "none", // Add this line
     interiorPolyiso: false,
     ach50Preset: "builder",
     ach50: 5,
@@ -846,6 +897,7 @@ export default function App() {
     framingKey: "2x6",
     cavityKey: "mineralwool",
     sheathingKey: "zipr6",
+    exteriorContinuousKey: "r6", // Add this line
     interiorPolyiso: true,
     ach50Preset: "energystar",
     ach50: 3,
@@ -855,19 +907,27 @@ export default function App() {
   // Compute totals for comparison summary
   const vol = shared.conditionedFloorArea * shared.avgCeilingHeight;
 
+  const A_foam = EXTERIOR_CONTINUOUS_INSULATION.find(
+    (o) => o.key === A.exteriorContinuousKey
+  ) || { rValue: 0 };
   const A_whole = calcWholeWallR({
     framingDepthIn:
       FRAMING_OPTIONS.find((f) => f.key === A.framingKey)?.depth || 3.5,
     cavityInsulationKey: A.cavityKey,
     exteriorSheathingKey: A.sheathingKey,
+    exteriorContinuousR: A_foam.rValue,
     interiorPolyiso: A.interiorPolyiso,
     framingFactor: A.framingFactor,
   });
+  const B_foam = EXTERIOR_CONTINUOUS_INSULATION.find(
+    (o) => o.key === B.exteriorContinuousKey
+  ) || { rValue: 0 };
   const B_whole = calcWholeWallR({
     framingDepthIn:
       FRAMING_OPTIONS.find((f) => f.key === B.framingKey)?.depth || 5.5,
     cavityInsulationKey: B.cavityKey,
     exteriorSheathingKey: B.sheathingKey,
+    exteriorContinuousR: B_foam.rValue,
     interiorPolyiso: B.interiorPolyiso,
     framingFactor: B.framingFactor,
   });
@@ -917,6 +977,7 @@ export default function App() {
         ?.depth || 3.5,
     cavityInsulationKey: shared.hers.reference.cavityKey,
     exteriorSheathingKey: shared.hers.reference.sheathingKey,
+    exteriorContinuousR: 0, // Add this for the reference home
     interiorPolyiso: shared.hers.reference.interiorPolyiso,
     framingFactor: A.framingFactor, // assume same framing factor
   });
