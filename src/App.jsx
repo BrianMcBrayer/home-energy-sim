@@ -11,11 +11,15 @@ import {
 } from "recharts";
 
 /**
- * Home Insulation & Energy Performance Simulator — v1.2
+ * Home Insulation & Energy Performance Simulator — v1.3
  *
  * Fixes:
  * - ReferenceError: Qh_ceil was referenced before definition in calcReferenceWholeHouseKWh.
  *   Added explicit Qh_ceil/Qc_ceil terms using U_ceil and ceilingArea before totals.
+ * - Fixed double-counting of sheathing R-value in calcWholeWallR function.
+ *   Sheathing is now treated as a distinct layer rather than bundled with common layers.
+ * - Updated ScenarioCard to display whole-house energy costs (walls + windows + ceilings + infiltration)
+ *   instead of just walls + infiltration, aligning cost figures with HERS index calculations.
  *
  * Adds:
  * - Built‑in unit tests (sanity checks) for core math paths and HERS estimator.
@@ -172,18 +176,21 @@ function calcWholeWallR({
   const rCavity = calcCavityR(depth, cavityInsulationKey);
   const rWoodStud = depth * R_PER_INCH.wood;
   const ext = EXTERIOR_SHEATHING.find((x) => x.key === exteriorSheathingKey);
-  const rExteriorContinuous = ext?.rContinuous ?? 0;
+
+  // Determine the R-value of the sheathing layer itself.
+  // Standard OSB is R-0.62, while insulated sheathing has its own value.
+  const rSheathing = ext?.rContinuous > 0 ? ext.rContinuous : LAYER_R.osb716;
+
   const rInteriorThermalBreak = interiorPolyiso
     ? LAYER_R.interiorPolyisoHalf
     : 0;
 
-  // Common layers included in both paths
-  const rCommon =
-    LAYER_R.airFilms + LAYER_R.drywallHalf + LAYER_R.osb716 + LAYER_R.siding;
-  const rStudPath =
-    rCommon + rInteriorThermalBreak + rExteriorContinuous + rWoodStud;
-  const rCavityPath =
-    rCommon + rInteriorThermalBreak + rExteriorContinuous + rCavity;
+  // Common layers NOT including sheathing
+  const rCommon = LAYER_R.airFilms + LAYER_R.drywallHalf + LAYER_R.siding;
+
+  // Add the distinct sheathing R-value to both paths
+  const rStudPath = rCommon + rInteriorThermalBreak + rSheathing + rWoodStud;
+  const rCavityPath = rCommon + rInteriorThermalBreak + rSheathing + rCavity;
 
   // Area-weighted effective R
   const uEff = framingFactor / rStudPath + (1 - framingFactor) / rCavityPath;
@@ -551,11 +558,6 @@ function ScenarioCard({ title, state, onChange, shared }) {
     [state.framingKey, state.cavityKey]
   );
 
-  const chartData = [
-    { name: "Heating", Cost: loads.costHeat },
-    { name: "Cooling", Cost: loads.costCool },
-  ];
-
   // HERS (rated vs reference)
   const ratedWH = React.useMemo(
     () =>
@@ -568,6 +570,18 @@ function ScenarioCard({ title, state, onChange, shared }) {
       }),
     [wholeWall.rEff, state.ach50, shared]
   );
+
+  // Calculate costs based on whole-house energy use (walls + windows + ceilings + infiltration)
+  const wholeHouseCosts = React.useMemo(() => {
+    const costHeat = ratedWH.kWhHeat * shared.econ.elecPricePerKWh;
+    const costCool = ratedWH.kWhCool * shared.econ.elecPricePerKWh;
+    return { costHeat, costCool, annualCost: costHeat + costCool };
+  }, [ratedWH, shared.econ.elecPricePerKWh]);
+
+  const chartData = [
+    { name: "Heating", Cost: wholeHouseCosts.costHeat },
+    { name: "Cooling", Cost: wholeHouseCosts.costCool },
+  ];
 
   const refWall = React.useMemo(
     () =>
@@ -738,7 +752,8 @@ function ScenarioCard({ title, state, onChange, shared }) {
       {/* Chart */}
       <div className="mt-5">
         <div className="text-sm text-slate-600 mb-2">
-          Annual Energy Costs (walls + infiltration attributable to this ACH)
+          Annual Energy Costs (whole-house: walls + windows + ceilings +
+          infiltration)
         </div>
         <div className="h-52">
           <ResponsiveContainer width="100%" height="100%">
@@ -762,28 +777,33 @@ function ScenarioCard({ title, state, onChange, shared }) {
         <div className="rounded-xl bg-slate-50 p-3 border">
           <div className="text-slate-500">Annual Heating Cost</div>
           <div className="text-lg font-semibold">
-            {formatUSD(loads.costHeat)}
+            {formatUSD(wholeHouseCosts.costHeat)}
           </div>
           <div className="text-xs text-slate-500">
-            Heat load: {(loads.Qh_total_BTU / 1e6).toFixed(1)} MMBTU
+            Heat load: {((ratedWH.kWhHeat * 3412) / 1e6).toFixed(1)} MMBTU
           </div>
         </div>
         <div className="rounded-xl bg-slate-50 p-3 border">
           <div className="text-slate-500">Annual Cooling Cost</div>
           <div className="text-lg font-semibold">
-            {formatUSD(loads.costCool)}
+            {formatUSD(wholeHouseCosts.costCool)}
           </div>
           <div className="text-xs text-slate-500">
-            Cool load: {(loads.Qc_total_BTU / 1e6).toFixed(1)} MMBTU
+            Cool load:{" "}
+            {(
+              (ratedWH.kWhCool * 1000 * Math.max(8, shared.hvac.coolingSEER)) /
+              1e6
+            ).toFixed(1)}{" "}
+            MMBTU
           </div>
         </div>
         <div className="rounded-xl bg-slate-50 p-3 border">
           <div className="text-slate-500">Annual (Heating + Cooling)</div>
           <div className="text-lg font-semibold">
-            {formatUSD(loads.annualCost)}
+            {formatUSD(wholeHouseCosts.annualCost)}
           </div>
           <div className="text-xs text-slate-500">
-            ACHnat≈{loads.ACHnat.toFixed(2)} h⁻¹
+            ACHnat≈{ratedWH.ACHnat.toFixed(2)} h⁻¹
           </div>
         </div>
         <div className="rounded-xl bg-slate-50 p-3 border">
