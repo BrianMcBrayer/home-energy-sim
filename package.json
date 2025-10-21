@@ -20,7 +20,7 @@
     "@types/react-dom": "^19.1.7",
     "autoprefixer": "^10.4.19",
     "postcss": "^8.4.41",
-    "tailwindcss": "^4.1.12",
+    "tailwindcss": "^4.1.15",
     "vite": "^7.1.3"
   }
 }
